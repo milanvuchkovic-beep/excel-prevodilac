@@ -2,40 +2,66 @@ import streamlit as st
 import openpyxl
 from deep_translator import GoogleTranslator
 import io
+import os
+from concurrent.futures import ThreadPoolExecutor
+
+# --- FIKSNI REČNIK (Sigurnosni filter) ---
+# Ovde ubacujemo reči koje Google pogrešno prevodi.
+# Skripta prvo gleda ovde, pa tek onda pita Google.
+CUSTOM_DICTIONARY = {
+    "Injection/Brizganje": "ইনজেকশন (Injection)",
+    "Injection": "ইনজেকশন",
+    "Brizganje": "ইনজেকশন (Injection)",
+    "Squirting": "Injection", # Za svaki slučaj :)
+    # Možeš dodati još termina ovde po potrebi format: "Srpski": "Bengalski"
+}
 
 # --- KONFIGURACIJA ---
-st.set_page_config(page_title="Single Sheet Translator", layout="centered")
+st.set_page_config(page_title="Brzi Excel Prevodilac", layout="centered")
 
-st.title("🇧🇩 Excel Prevodilac (Samo 1 Sheet)")
+st.title("🇧🇩 Excel Prevodilac (Safe & Fast)")
 st.markdown("""
-Ova aplikacija:
-1. Uzima jedan sheet koji izabereš.
-2. Pretvara sve formule u tekst (da se ne pokvare).
-3. Prevodi tekst na bengalski.
-4. **Briše sve ostale sheetove** i daje ti čist fajl.
+Ova verzija:
+1. Koristi **Fiksni rečnik** za tehničke termine (nema "čudnih" prevoda).
+2. Koristi **Paralelno procesiranje** za veću brzinu.
+3. Izbacuje čist sheet bez formula.
 """)
 
-def translate_single_sheet(file, sheet_name):
-    # 1. Učitavanje fajla (data_only=True SKIDA FORMULE i ostavlja vrednosti)
-    # Ovo je ključno da prevod ne bi brljao formule
+# --- FUNKCIJA ZA PARALELNI PREVOD ---
+def translate_text_worker(text):
+    """Ova funkcija prevodi jednu reč. Koristi se u threadovima."""
+    text = text.strip()
+    
+    # 1. Provera u fiksnom rečniku (Override)
+    # Proveravamo da li se fraza sadrži u našem rečniku
+    for key, value in CUSTOM_DICTIONARY.items():
+        if key.lower() in text.lower():
+            return value
+            
+    # 2. Ako nije u rečniku, pitaj Google
+    try:
+        # Instanciramo prevodioca ovde da ne bi došlo do konflikta threadova
+        translator = GoogleTranslator(source='sr', target='bn')
+        return translator.translate(text)
+    except:
+        return text # Ako pukne, vrati original
+
+def translate_single_sheet_optimized(file, sheet_name):
+    # 1. Učitavanje
     wb = openpyxl.load_workbook(file, data_only=True)
     
     if sheet_name not in wb.sheetnames:
         return None
         
-    # Radimo direktno na originalnom sheetu jer ćemo ostale obrisati
     ws = wb[sheet_name]
-    ws.title = "Bengali_Prevod" # Menjamo ime sheeta
+    ws.title = "Bengali_Prevod"
     
-    # 2. BRISANJE OSTALIH SHEETOVA (Izolacija)
-    # Prolazimo kroz sva imena i brišemo sve što nije naš sheet
+    # 2. Brisanje ostalih
     for name in wb.sheetnames:
         if name != "Bengali_Prevod":
             del wb[name]
             
-    # Sada je u 'wb' ostao samo jedan sheet. Njega prevodimo.
-    
-    # 3. Optimizovano skeniranje teksta
+    # 3. Skeniranje unikatnog teksta
     unique_texts = set()
     cells_map = [] 
 
@@ -45,36 +71,30 @@ def translate_single_sheet(file, sheet_name):
         for cell in row:
             if cell.value and isinstance(cell.value, str):
                 val = cell.value.strip()
-                # Uslov: Nije prazno i nije samo broj
                 if val and not val.isdigit():
                     unique_texts.add(val)
                     cells_map.append(cell)
 
     total_unique = len(unique_texts)
-    st.caption(f"Pronađeno {total_unique} fraza za prevod.")
+    st.caption(f"Broj unikatnih fraza za prevod: {total_unique}")
     
     if total_unique > 0:
-        # 4. Prevod
-        translator = GoogleTranslator(source='sr', target='bn')
+        unique_list = list(unique_texts)
         translation_dict = {}
         
-        progress_bar.progress(10, text="Prevodim...")
-        unique_list = list(unique_texts)
+        progress_bar.progress(10, text=f"Pokrećem Turbo Prevod ({total_unique} fraza)...")
         
-        for i, text in enumerate(unique_list):
-            # Update bara ređe (svakih 5%) da ne koči
-            if i % 5 == 0:
-                percent = 10 + int((i / total_unique) * 80)
-                progress_bar.progress(percent, text=f"Prevodim: {text[:15]}...")
+        # --- TURBO MODE (ThreadPoolExecutor) ---
+        # Umesto jednog po jednog, šaljemo 10 zahteva odjednom
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(translate_text_worker, unique_list))
             
-            try:
-                translated = translator.translate(text)
-                translation_dict[text] = translated
-            except:
-                translation_dict[text] = text
-                
+        # Spajamo rezultate
+        for original, translated in zip(unique_list, results):
+            translation_dict[original] = translated
+            
         # 5. Primena prevoda
-        progress_bar.progress(95, text="Upisujem podatke...")
+        progress_bar.progress(90, text="Upisujem podatke...")
         for cell in cells_map:
             original = cell.value.strip()
             if original in translation_dict:
@@ -93,23 +113,29 @@ uploaded_file = st.file_uploader("Izaberi Excel fajl", type=["xlsx"])
 
 if uploaded_file is not None:
     try:
-        # Samo čitanje strukture
         wb_temp = openpyxl.load_workbook(uploaded_file, read_only=True, data_only=True)
         sheet_names = wb_temp.sheetnames
         wb_temp.close()
         
-        selected_sheet = st.selectbox("Koji sheet želiš da izdvojiš i prevedeš?", sheet_names)
+        selected_sheet = st.selectbox("Koji sheet prevodimo?", sheet_names)
         
-        if st.button("🚀 Prevedi i Izdvoj"):
-            with st.spinner('Obrađujem...'):
-                result = translate_single_sheet(uploaded_file, selected_sheet)
+        if st.button("🚀 Prevedi"):
+            with st.spinner('Radim...'):
+                result = translate_single_sheet_optimized(uploaded_file, selected_sheet)
                 
                 if result:
                     st.success("Završeno!")
+                    
+                    # --- KREIRANJE IMENA FAJLA ---
+                    # Uzimamo originalno ime bez ekstenzije
+                    original_name = os.path.splitext(uploaded_file.name)[0]
+                    # Format: ImeFajla_ImeSheeta_BN.xlsx
+                    new_filename = f"{original_name}_{selected_sheet}_BN.xlsx"
+                    
                     st.download_button(
-                        label="📥 Preuzmi XLSX (Samo 1 sheet)",
+                        label="📥 Preuzmi Prevedeni Fajl",
                         data=result,
-                        file_name=f"{selected_sheet}_Bengali.xlsx",
+                        file_name=new_filename,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
                 else:
