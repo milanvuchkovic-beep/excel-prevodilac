@@ -13,7 +13,7 @@ CUSTOM_DICTIONARY = {
     "Injection": "ইনজেকশন",
     "Brizganje": "ইনজেকশন (Injection)",
     "Squirting": "Injection", # Za svaki slučaj :)
-    # Možeš dodati još termina ovde po potrebi format: "Srpski": "Bengalski"
+    # dodavanje dodatnih termina ovde po potrebi format: "Srpski": "Bengalski"
 }
 
 # --- KONFIGURACIJA ---
