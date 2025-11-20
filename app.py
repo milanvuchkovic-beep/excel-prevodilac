@@ -22,7 +22,7 @@ st.set_page_config(page_title="Brzi Excel Prevodilac", layout="centered")
 st.title("🇧🇩 Excel Prevodilac (Safe & Fast)")
 st.markdown("""
 Ova verzija:
-1. Koristi **Fiksni rečnik** za tehničke termine (nema "čudnih" prevoda).
+1. Koristi **Fiksni rečnik** za tehničke termine.
 2. Koristi **Paralelno procesiranje** za veću brzinu.
 3. Izbacuje čist sheet bez formula.
 """)
